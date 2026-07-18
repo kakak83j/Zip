@@ -2,6 +2,7 @@ import os
 import zipfile
 import shutil
 import tempfile
+import asyncio
 import threading
 from pathlib import Path
 from telegram import Update
@@ -15,12 +16,15 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_USER = os.getenv("GITHUB_USERNAME")
 PORT = int(os.getenv("PORT", 8080))
 
-# Flask app for health checks (Railway expects a web service)
+# Flask app for health checks
 app_flask = Flask(__name__)
 
 @app_flask.route('/health')
 def health():
     return "OK", 200
+
+def run_flask():
+    app_flask.run(host='0.0.0.0', port=PORT)
 
 # Temporary directory for zip processing
 TEMP_DIR = tempfile.mkdtemp(prefix="bot_zip_")
@@ -52,7 +56,7 @@ async def upload_folder_to_github(repo, folder_path, branch="main"):
         return f"Upload Error: {str(e)}"
 
 # ------------------------------------------------------------------
-# Telegram Handlers
+# Telegram Handlers (async)
 # ------------------------------------------------------------------
 async def handle_zip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
@@ -89,23 +93,22 @@ async def handle_zip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎯 Zip भेजो, मैं उसे GitHub Repo में बदल दूंगा।")
 
-def run_bot():
+# ------------------------------------------------------------------
+# Bot startup function (async)
+# ------------------------------------------------------------------
+async def run_bot():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_zip))
     print("🤖 Bot चल रहा है...")
-    app.run_polling()
-
-def run_flask():
-    app_flask.run(host='0.0.0.0', port=PORT)
+    await app.run_polling()
 
 # ------------------------------------------------------------------
-# Main – Run both bot (thread) and Flask (main thread)
+# Main – Flask in thread, Bot in main with asyncio
 # ------------------------------------------------------------------
 if __name__ == "__main__":
-    # Bot in background thread
-    thread = threading.Thread(target=run_bot)
-    thread.daemon = True
-    thread.start()
-    # Flask (for health checks)
-    run_flask()
+    # Start Flask in a daemon thread (so it doesn't block)
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    # Run the bot (async) in the main thread
+    asyncio.run(run_bot())
