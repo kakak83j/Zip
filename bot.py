@@ -38,6 +38,7 @@ async def upload_folder_to_github(repo, folder_path, branch="main"):
             for file in files:
                 file_path = os.path.join(root, file)
                 relative_path = os.path.relpath(file_path, folder_path)
+                # relative_path now starts from folder_path (which is the root we want)
                 all_files.append((relative_path, file_path))
         if not all_files:
             return "Repo empty (no files)"
@@ -67,11 +68,25 @@ async def handle_zip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await context.bot.get_file(document.file_id)
     zip_path = os.path.join(TEMP_DIR, document.file_name)
     await file.download_to_drive(zip_path)
+
     await update.message.reply_text("📂 Unzip हो रहा है...")
     extract_path = os.path.join(TEMP_DIR, "extracted_" + str(user.id))
     os.makedirs(extract_path, exist_ok=True)
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_path)
+
+    # 🔥 NEW: Check if there is a single top-level folder and remove it
+    items = os.listdir(extract_path)
+    if len(items) == 1 and os.path.isdir(os.path.join(extract_path, items[0])):
+        top_folder = items[0]
+        await update.message.reply_text(f"📁 एकल शीर्ष फोल्डर ('{top_folder}') हटाया जा रहा है...")
+        # Move contents of top_folder to extract_path and remove the folder
+        top_path = os.path.join(extract_path, top_folder)
+        for item in os.listdir(top_path):
+            shutil.move(os.path.join(top_path, item), extract_path)
+        os.rmdir(top_path)  # now empty
+
+    # Proceed with upload
     repo_name = document.file_name.replace('.zip', '').replace(' ', '-')
     await update.message.reply_text(f"🏗️ GitHub पर '{repo_name}' बन रहा है...")
     g = Github(GITHUB_TOKEN)
