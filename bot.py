@@ -2,7 +2,6 @@ import os
 import zipfile
 import shutil
 import tempfile
-import asyncio
 import threading
 from pathlib import Path
 from telegram import Update
@@ -94,21 +93,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎯 Zip भेजो, मैं उसे GitHub Repo में बदल दूंगा।")
 
 # ------------------------------------------------------------------
-# Bot startup function (async)
+# Bot startup – synchronous (runs polling)
 # ------------------------------------------------------------------
-async def run_bot():
+def run_bot():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_zip))
     print("🤖 Bot चल रहा है...")
-    await app.run_polling()
+    app.run_polling()   # This is synchronous and blocks
 
 # ------------------------------------------------------------------
-# Main – Flask in thread, Bot in main with asyncio
+# Main – start Flask in a thread, then run bot in main thread
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     # Start Flask in a daemon thread (so it doesn't block)
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    # Run the bot (async) in the main thread
-    asyncio.run(run_bot())
+    # Run the bot (blocking) in the main thread
+    run_bot()
