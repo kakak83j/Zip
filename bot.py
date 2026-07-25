@@ -78,49 +78,53 @@ def download_repo_as_zip(repo_name, download_path):
     except Exception as e:
         return None, str(e)
 
-# ---------- COMMAND 1: /download_all – Download all repos as one ZIP ----------
-async def download_all_repos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📦 सभी रिपोज़िटरीज़ डाउनलोड हो रही हैं... इसमें कुछ मिनट लग सकते हैं।")
+# ---------- COMMAND 1: /download_all_separate – All repos as separate ZIPs ----------
+async def download_all_separate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📦 सभी रिपो को अलग-अलग ZIP में डाउनलोड किया जा रहा है...")
     
     repos = list(user_obj.get_repos())
     if not repos:
         await update.message.reply_text("❌ कोई रिपो नहीं मिली।")
         return
 
-    # Create temp folder for all repos
+    # Create temp folder
     all_repos_folder = os.path.join(TEMP_DIR, "all_repos_" + str(update.message.from_user.id))
     os.makedirs(all_repos_folder, exist_ok=True)
     
     downloaded_count = 0
+    failed_repos = []
+    
     for repo in repos:
         repo_name = repo.name
         zip_path = os.path.join(all_repos_folder, f"{repo_name}.zip")
         status, msg = download_repo_as_zip(repo_name, zip_path)
         if status:
             downloaded_count += 1
-        # Update every 5 repos
+            # Send each ZIP individually
+            try:
+                await update.message.reply_document(
+                    document=open(zip_path, 'rb'),
+                    caption=f"📦 `{repo_name}` – Download"
+                )
+                os.remove(zip_path)  # Clean after sending
+            except Exception as e:
+                failed_repos.append(f"{repo_name}: send error")
+        else:
+            failed_repos.append(f"{repo_name}: {msg}")
+        
+        # Update progress every 5 repos
         if downloaded_count % 5 == 0:
-            await update.message.reply_text(f"⏳ {downloaded_count}/{repos.totalCount} डाउनलोड हुए...")
+            await update.message.reply_text(f"⏳ {downloaded_count}/{len(repos)} डाउनलोड हो चुके हैं...")
 
-    # Create a single ZIP containing all repo ZIPs
-    master_zip_path = os.path.join(TEMP_DIR, f"all_repos_{update.message.from_user.id}.zip")
-    with zipfile.ZipFile(master_zip_path, 'w') as master_zip:
-        for root, dirs, files in os.walk(all_repos_folder):
-            for file in files:
-                file_path = os.path.join(root, file)
-                master_zip.write(file_path, arcname=file)
-
-    # Send the master ZIP
-    await update.message.reply_document(
-        document=open(master_zip_path, 'rb'),
-        caption=f"📦 {downloaded_count} रिपोज़िटरीज़ का ZIP – Enjoy!"
-    )
-    
     # Cleanup
     shutil.rmtree(all_repos_folder, ignore_errors=True)
-    os.remove(master_zip_path)
+    
+    summary = f"✅ {downloaded_count} रिपो डाउनलोड हुईं।"
+    if failed_repos:
+        summary += f"\n⚠️ फेल: {', '.join(failed_repos[:5])}" + ("..." if len(failed_repos) > 5 else "")
+    await update.message.reply_text(summary)
 
-# ---------- COMMAND 2: /privatize <repo_name> – Single repo public→private ----------
+# ---------- COMMAND 2: /privatize <repo_name> – Public→Private ----------
 async def privatize_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("❌ कृपया रिपो का नाम दें: `/privatize repo_name`")
@@ -137,37 +141,62 @@ async def privatize_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except GithubException as e:
         await update.message.reply_text(f"❌ Error: {e.data.get('message', str(e))}")
 
-# ---------- COMMAND 3: /privatize_all – ALL repos public→private ----------
-async def privatize_all_repos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔒 सभी रिपो को प्राइवेट किया जा रहा है...")
-    
-    repos = list(user_obj.get_repos())
-    if not repos:
-        await update.message.reply_text("❌ कोई रिपो नहीं मिली।")
+# ---------- COMMAND 3: /publicize <repo_name> – Private→Public ----------
+async def publicize_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ कृपया रिपो का नाम दें: `/publicize repo_name`")
         return
     
-    privatized = 0
-    for repo in repos:
-        if not repo.private:
-            try:
-                repo.edit(private=True)
-                privatized += 1
-            except Exception as e:
-                await update.message.reply_text(f"⚠️ `{repo.name}` में error: {str(e)[:50]}...")
-        # Update every 10 repos
-        if privatized % 10 == 0:
-            await update.message.reply_text(f"⏳ {privatized} रिपो प्राइवेट हो चुकी हैं...")
+    repo_name = context.args[0]
+    try:
+        repo = user_obj.get_repo(repo_name)
+        if repo.private:
+            repo.edit(private=False)
+            await update.message.reply_text(f"✅ `{repo_name}` अब **पब्लिक** है।")
+        else:
+            await update.message.reply_text(f"ℹ️ `{repo_name}` पहले से ही पब्लिक है।")
+    except GithubException as e:
+        await update.message.reply_text(f"❌ Error: {e.data.get('message', str(e))}")
+
+# ---------- COMMAND 4: /delete_repo <repo_name> – Delete a repo ----------
+async def delete_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ कृपया रिपो का नाम दें: `/delete_repo repo_name`")
+        return
     
-    await update.message.reply_text(f"✅ {privatized} रिपोज़िटरीज़ अब **प्राइवेट** हैं।")
+    repo_name = context.args[0]
+    # Confirmation check (safety)
+    await update.message.reply_text(f"⚠️ क्या तुम सच में `{repo_name}` को **डिलीट** करना चाहते हो? यह **हमेशा के लिए** चला जाएगा!\nहाँ के लिए `/confirm_delete {repo_name}` टाइप करो।")
+    context.user_data['pending_delete'] = repo_name
+
+async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ कृपया रिपो का नाम दें: `/confirm_delete repo_name`")
+        return
+    
+    repo_name = context.args[0]
+    pending = context.user_data.get('pending_delete')
+    if pending != repo_name:
+        await update.message.reply_text("❌ नाम मेल नहीं खाता। पहले `/delete_repo repo_name` चलाओ।")
+        return
+    
+    try:
+        repo = user_obj.get_repo(repo_name)
+        repo.delete()
+        await update.message.reply_text(f"🗑️ `{repo_name}` **हमेशा के लिए डिलीट** कर दिया गया।")
+        context.user_data.pop('pending_delete', None)
+    except GithubException as e:
+        await update.message.reply_text(f"❌ Error: {e.data.get('message', str(e))}")
 
 # ---------- Original: ZIP / GitHub URL Handler ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎯 **क्या कर सकता हूँ:**\n"
         "1. **ZIP** या **GitHub URL** भेजो → नई रिपो बनाऊँ\n"
-        "2. `/download_all` – सभी रिपो का ZIP डाउनलोड करूँ\n"
+        "2. `/download_all_separate` – सभी रिपो को अलग-अलग ZIP में\n"
         "3. `/privatize repo_name` – एक रिपो को प्राइवेट करूँ\n"
-        "4. `/privatize_all` – सभी रिपो को प्राइवेट करूँ"
+        "4. `/publicize repo_name` – एक रिपो को पब्लिक करूँ\n"
+        "5. `/delete_repo repo_name` – एक रिपो को डिलीट करूँ (फिर `/confirm_delete` से पुष्टि करो)"
     )
 
 async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,7 +245,6 @@ async def handle_repo_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.makedirs(extract_path, exist_ok=True)
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_path)
-            # Send the ZIP back to user
             await update.message.reply_document(
                 document=open(zip_path, 'rb'),
                 caption="📦 डाउनलोड किया गया ZIP"
@@ -302,9 +330,11 @@ def run_bot():
     
     # Commands
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("download_all", download_all_repos))
+    app.add_handler(CommandHandler("download_all_separate", download_all_separate))
     app.add_handler(CommandHandler("privatize", privatize_repo))
-    app.add_handler(CommandHandler("privatize_all", privatize_all_repos))
+    app.add_handler(CommandHandler("publicize", publicize_repo))
+    app.add_handler(CommandHandler("delete_repo", delete_repo))
+    app.add_handler(CommandHandler("confirm_delete", confirm_delete))
     
     # Conversation for ZIP/URL
     conv_handler = ConversationHandler(
